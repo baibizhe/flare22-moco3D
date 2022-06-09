@@ -30,6 +30,10 @@ import torchvision.datasets as datasets
 import torchvision.models as torchvision_models
 from torch.utils.tensorboard import SummaryWriter
 
+import flare_loader
+import torchio as tio
+
+
 import moco.builder
 import moco.loader
 import moco.optimizer
@@ -141,6 +145,8 @@ def main():
     args.distributed = args.world_size > 1 or args.multiprocessing_distributed
 
     ngpus_per_node = torch.cuda.device_count()
+
+    print(args.gpu, ngpus_per_node)
     if args.multiprocessing_distributed:
         # Since we have ngpus_per_node processes per node, the total world_size
         # needs to be adjusted accordingly
@@ -182,6 +188,7 @@ def main_worker(gpu, ngpus_per_node, args):
             partial(vits.__dict__[args.arch], stop_grad_conv1=args.stop_grad_conv1),
             args.moco_dim, args.moco_mlp_dim, args.moco_t)
     else:
+        # TODO: FLARE22: Update ResNet/ViT with a 3D backbone
         model = moco.builder.MoCo_ResNet(
             partial(torchvision_models.__dict__[args.arch], zero_init_residual=True), 
             args.moco_dim, args.moco_mlp_dim, args.moco_t)
@@ -215,7 +222,7 @@ def main_worker(gpu, ngpus_per_node, args):
         torch.cuda.set_device(args.gpu)
         model = model.cuda(args.gpu)
         # comment out the following line for debugging
-        raise NotImplementedError("Only DistributedDataParallel is supported.")
+        # raise NotImplementedError("Only DistributedDataParallel is supported.")
     else:
         # AllGather/rank implementation in this code only supports DistributedDataParallel.
         raise NotImplementedError("Only DistributedDataParallel is supported.")
@@ -254,7 +261,8 @@ def main_worker(gpu, ngpus_per_node, args):
     cudnn.benchmark = True
 
     # Data loading code
-    traindir = os.path.join(args.data, 'train')
+    # traindir = os.path.join(args.data, 'train')
+    traindir = args.data
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
 
@@ -284,13 +292,19 @@ def main_worker(gpu, ngpus_per_node, args):
         normalize
     ]
 
-    train_dataset = datasets.ImageFolder(
-        traindir,
-        moco.loader.TwoCropsTransform(transforms.Compose(augmentation1), 
-                                      transforms.Compose(augmentation2)))
+    # TODO: FLARE22: Here I use dummy augmentation to test the code, please replace the above one with TorchIO implementation
+    temp_augmentation1 = [
+        tio.transforms.RandomBlur()
+    ]
 
+    # train_dataset = datasets.ImageFolder(
+    #     traindir,
+    #     moco.loader.TwoCropsTransform(transforms.Compose(augmentation1), 
+    #                                   transforms.Compose(augmentation2)))
+
+    train_dataset = flare_loader.CustomUnlabelledDataset([os.path.join(traindir, x) for x in os.listdir(traindir)], tio.transforms.Compose(temp_augmentation1))
     if args.distributed:
-        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
+        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, temp_augmentation1)
     else:
         train_sampler = None
 
@@ -334,7 +348,7 @@ def train(train_loader, model, optimizer, scaler, summary_writer, epoch, args):
     end = time.time()
     iters_per_epoch = len(train_loader)
     moco_m = args.moco_m
-    for i, (images, _) in enumerate(train_loader):
+    for i, (images) in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
 
