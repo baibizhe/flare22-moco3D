@@ -7,12 +7,17 @@
 import torch
 import torch.nn as nn
 
+from models.unet3d.buildingblocks import create_encoders, ExtResNetBlock, Encoder
+from models.unet3d.utils import number_of_features_per_level
+from resnetEncoder import resnetEncoder
+
 
 class MoCo(nn.Module):
     """
     Build a MoCo model with a base encoder, a momentum encoder, and two MLPs
     https://arxiv.org/abs/1911.05722
     """
+
     def __init__(self, base_encoder, dim=256, mlp_dim=4096, T=1.0):
         """
         dim: feature dimension (default: 256)
@@ -65,11 +70,13 @@ class MoCo(nn.Module):
         q = nn.functional.normalize(q, dim=1)
         k = nn.functional.normalize(k, dim=1)
         # gather all targets
-        k = concat_all_gather(k)
+        # k = concat_all_gather(k)
         # Einstein sum is more intuitive
         logits = torch.einsum('nc,mc->nm', [q, k]) / self.T
         N = logits.shape[0]  # batch size per GPU
-        labels = (torch.arange(N, dtype=torch.long) + N * torch.distributed.get_rank()).cuda()
+        # labels = (torch.arange(N, dtype=torch.long) + N * torch.distributed.get_rank()).cuda()
+        labels = (torch.arange(N, dtype=torch.long)).cuda()
+
         return nn.CrossEntropyLoss()(logits, labels) * (2 * self.T)
 
     def forward(self, x1, x2, m):
@@ -81,8 +88,9 @@ class MoCo(nn.Module):
         Output:
             loss
         """
-
+        # print(x1.shape,x2.shape)
         # compute features
+        print(self.base_encoder(x1).shape)
         q1 = self.predictor(self.base_encoder(x1))
         q2 = self.predictor(self.base_encoder(x2))
 
@@ -99,7 +107,7 @@ class MoCo(nn.Module):
 class MoCo_ResNet(MoCo):
     def _build_projector_and_predictor_mlps(self, dim, mlp_dim):
         hidden_dim = self.base_encoder.fc.weight.shape[1]
-        del self.base_encoder.fc, self.momentum_encoder.fc # remove original fc layer
+        del self.base_encoder.fc, self.momentum_encoder.fc  # remove original fc layer
 
         # projectors
         self.base_encoder.fc = self._build_mlp(2, hidden_dim, mlp_dim, dim)
@@ -112,7 +120,7 @@ class MoCo_ResNet(MoCo):
 class MoCo_ViT(MoCo):
     def _build_projector_and_predictor_mlps(self, dim, mlp_dim):
         hidden_dim = self.base_encoder.head.weight.shape[1]
-        del self.base_encoder.head, self.momentum_encoder.head # remove original fc layer
+        del self.base_encoder.head, self.momentum_encoder.head  # remove original fc layer
 
         # projectors
         self.base_encoder.head = self._build_mlp(3, hidden_dim, mlp_dim, dim)
@@ -120,6 +128,50 @@ class MoCo_ViT(MoCo):
 
         # predictor
         self.predictor = self._build_mlp(2, dim, mlp_dim, dim)
+
+class MoCo_ResNET3D(MoCo):
+    # def base_encoader_forward(self, x):
+    #     # if self.base_encoder.pooling is not  None:
+    #     #     x = self.base_encoder.avgpool(x)
+    #     x = self.base_encoder(x)
+    #     x = self.base_encoder.self.avgpool(x)
+    #     x = self.base_encoder.fc(x)
+    #     return x
+    #
+    # def momentum_encoder_forward(self, x):
+    #     # if self.momentum_encoder.pooling is not  None:
+    #     #     x = self.momentum_encoder.pooling(x)
+    #     x = self.momentum_encoder(x)
+    #     x = self.momentum_encoder.self.avgpool(x)
+    #     x = self.momentum_encoder.fc(x)
+    #     return x
+
+    def __init__(self, base_encoder, dim=256, mlp_dim=4096, T=1.0,num_levels=4):
+        super(MoCo, self).__init__()
+
+        self.T = T
+        self.num_levels = num_levels
+        self.base_encoder = resnetEncoder(num_levels=num_levels)
+        self.momentum_encoder = resnetEncoder(num_levels=num_levels)
+
+
+        self._build_projector_and_predictor_mlps(dim, mlp_dim)
+
+        for param_b, param_m in zip(self.base_encoder.parameters(), self.momentum_encoder.parameters()):
+            param_m.data.copy_(param_b.data)  # initialize
+            param_m.requires_grad = False  # not update by gradient
+
+    def _build_projector_and_predictor_mlps(self, dim, mlp_dim):
+
+        hidden_dim = self.base_encoder.encoders[-1].basic_module.conv3.conv.out_channels*3*int(self.num_levels/2)
+        # projectors
+        self.base_encoder.fc = self._build_mlp(3, hidden_dim, mlp_dim, dim).cuda()
+        self.momentum_encoder.fc = self._build_mlp(3, hidden_dim, mlp_dim, dim).cuda()
+        self.base_encoder.avgpool = nn.Sequential(nn.AdaptiveAvgPool2d((1, 1))).cuda()
+        self.momentum_encoder.avgpool = nn.Sequential(nn.AdaptiveAvgPool2d((1, 1))).cuda()
+
+        # predictor
+        self.predictor = self._build_mlp(2, dim, mlp_dim, dim).cuda()
 
 
 # utils
@@ -130,7 +182,7 @@ def concat_all_gather(tensor):
     *** Warning ***: torch.distributed.all_gather has no gradient.
     """
     tensors_gather = [torch.ones_like(tensor)
-        for _ in range(torch.distributed.get_world_size())]
+                      for _ in range(torch.distributed.get_world_size())]
     torch.distributed.all_gather(tensors_gather, tensor, async_op=False)
 
     output = torch.cat(tensors_gather, dim=0)

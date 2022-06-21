@@ -8,7 +8,7 @@ from skimage.transform import resize
 from torch.utils.data import Dataset
 
 from neighboorCode import neighbour_code_to_normals
-
+import  torchio as tio
 
 class CustomImageDataset(Dataset):
     def __init__(self, CTImagePath, labelPath, imgTransform=None, labelTransform=None, TransformWillChangeValue=None):
@@ -42,11 +42,11 @@ class CustomUnlabelledDataset(Dataset):
         self.CTImagePath = CTImagePath
         self.imgTransform = imgTransform
         self.TransformWillChangeValue = TransformWillChangeValue
-
     def __len__(self):
         return len(self.CTImagePath)
 
     def __getitem__(self, idx):
+        # print(self.CTImagePath[idx])
         image = read_image(self.CTImagePath[idx]).astype(np.float32)
         # image =image/np.max(np.abs(image))
         # if self.imgTransform:
@@ -55,6 +55,7 @@ class CustomUnlabelledDataset(Dataset):
         #         image = self.TransformWillChangeValue(image)
         img1 = torch.tensor(self.imgTransform(image[None]))
         img2 = torch.tensor(self.imgTransform(image[None]))
+        # print(img1.shape)
         return [img1, img2]
 
 class CustomValidImageDataset(Dataset):
@@ -63,7 +64,7 @@ class CustomValidImageDataset(Dataset):
         self.labelPath = labelPath
         self.imgTransform = imgTransform
         self.labelTransform = labelTransform
-
+ 
     def __len__(self):
         return len(self.CTImagePath)
 

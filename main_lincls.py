@@ -59,7 +59,7 @@ parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
                     metavar='LR', help='initial (base) learning rate', dest='lr')
 parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
                     help='momentum')
-parser.add_argument('--wd', '--weight-decay', default=0., type=float,
+parser.add_argument('--wd', '--weight-decfay', default=0., type=float,
                     metavar='W', help='weight decay (default: 0.)',
                     dest='weight_decay')
 parser.add_argument('-p', '--print-freq', default=10, type=int,
@@ -308,6 +308,7 @@ def main_worker(gpu, ngpus_per_node, args):
         train(train_loader, model, criterion, optimizer, epoch, args)
 
         # evaluate on validation set
+        print("valid")
         acc1 = validate(val_loader, model, criterion, args)
 
         # remember best acc@1 and save checkpoint
@@ -381,6 +382,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
 
 
 def validate(val_loader, model, criterion, args):
+
     batch_time = AverageMeter('Time', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
     top1 = AverageMeter('Acc@1', ':6.2f')
@@ -426,6 +428,7 @@ def validate(val_loader, model, criterion, args):
 
 
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
+    print("save model")
     torch.save(state, filename)
     if is_best:
         shutil.copyfile(filename, 'model_best.pth.tar')

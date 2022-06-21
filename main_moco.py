@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+
 
 # Copyright (c) Facebook, Inc. and its affiliates.
 # All rights reserved.
@@ -17,7 +17,6 @@ import warnings
 from functools import partial
 
 import torch
-import torch.nn as nn
 import torch.nn.parallel
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
@@ -26,7 +25,6 @@ import torch.multiprocessing as mp
 import torch.utils.data
 import torch.utils.data.distributed
 import torchvision.transforms as transforms
-import torchvision.datasets as datasets
 import torchvision.models as torchvision_models
 from torch.utils.tensorboard import SummaryWriter
 
@@ -39,8 +37,8 @@ import moco.loader
 import moco.optimizer
 
 import vits
-
-
+from models.unet3d.model import ResidualUNet3D
+os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 torchvision_model_names = sorted(name for name in torchvision_models.__dict__
     if name.islower() and not name.startswith("__")
     and callable(torchvision_models.__dict__[name]))
@@ -83,7 +81,7 @@ parser.add_argument('--rank', default=-1, type=int,
                     help='node rank for distributed training')
 parser.add_argument('--dist-url', default='tcp://224.66.41.62:23456', type=str,
                     help='url used to set up distributed training')
-parser.add_argument('--dist-backend', default='nccl', type=str,
+parser.add_argument('--dist-backend', default='gloo', type=str,
                     help='distributed backend')
 parser.add_argument('--seed', default=None, type=int,
                     help='seed for initializing training. ')
@@ -159,6 +157,35 @@ def main():
         main_worker(args.gpu, ngpus_per_node, args)
 
 
+def validate(train_loader, model, optimizer, scaler, summary_writer, epoch, args):
+    # residualUNet3D = ResidualUNet3D()
+    #TODO: 把model.base_encoder的weight 读进到residualUNet3D的encoders里面
+    val_label_path = '/home/dd/flare2022/data/FLARE22_LabeledCase50/label/'
+    val_ct_path = '/home/dd/flare2022/data/FLARE22_LabeledCase50/images/'
+    torch.cuda.set_device(args.gpu)
+    val_model = get_model()
+    val_model.cuda(args.gpu)
+    # val_model.encoders = model.base_encoder.encoders
+    val_ds = flare_loader.CustomValidImageDataset([val_ct_path + i for i in os.listdir(val_ct_path)],
+                                                 [val_label_path + i for i in os.listdir(val_label_path)], 
+                                                 tio.transforms.Compose([tio.Resize(target_shape=(50, 128, 128))]),
+                                                 tio.transforms.Compose([tio.Resize(target_shape=(50, 128, 128))]))
+    val_loader = torch.utils.data.DataLoader(
+        val_ds, batch_size=1, 
+        num_workers=args.workers, pin_memory=True)
+    val_model.eval()
+    for batch_idx, (data, target) in enumerate(val_loader):
+        print("="*10, "VAL", data.shape, target.shape)
+        data, target = data.cuda(args.gpu), target.cuda(args.gpu)
+        with torch.no_grad():
+            with torch.cuda.amp.autocast(True):
+                pred = val_model(data)
+        print("=" * 10,"pred", pred.shape)
+    print("validate")
+    return 1
+    pass
+
+
 def main_worker(gpu, ngpus_per_node, args):
     args.gpu = gpu
 
@@ -189,9 +216,12 @@ def main_worker(gpu, ngpus_per_node, args):
             args.moco_dim, args.moco_mlp_dim, args.moco_t)
     else:
         # TODO: FLARE22: Update ResNet/ViT with a 3D backbone
-        model = moco.builder.MoCo_ResNet(
-            partial(torchvision_models.__dict__[args.arch], zero_init_residual=True), 
-            args.moco_dim, args.moco_mlp_dim, args.moco_t)
+        # model = moco.builder.MoCo_ResNet(
+        #     partial(torchvision_models.__dict__[args.arch], zero_init_residual=True),
+        #     args.moco_dim, args.moco_mlp_dim, args.moco_t)
+        model =   moco.builder.MoCo_ResNET3D(
+        base_encoder=get_model(),
+        dim=args.moco_dim, mlp_dim=args.moco_mlp_dim, T=args.moco_t)
 
     # infer learning rate before changing batch size
     args.lr = args.lr * args.batch_size / 256
@@ -226,7 +256,7 @@ def main_worker(gpu, ngpus_per_node, args):
     else:
         # AllGather/rank implementation in this code only supports DistributedDataParallel.
         raise NotImplementedError("Only DistributedDataParallel is supported.")
-    print(model) # print model after SyncBatchNorm
+    # print(model) # print model after SyncBatchNorm
 
     if args.optimizer == 'lars':
         optimizer = moco.optimizer.LARS(model.parameters(), args.lr,
@@ -279,30 +309,19 @@ def main_worker(gpu, ngpus_per_node, args):
         normalize
     ]
 
-    augmentation2 = [
-        transforms.RandomResizedCrop(224, scale=(args.crop_min, 1.)),
-        transforms.RandomApply([
-            transforms.ColorJitter(0.4, 0.4, 0.2, 0.1)  # not strengthened
-        ], p=0.8),
-        transforms.RandomGrayscale(p=0.2),
-        transforms.RandomApply([moco.loader.GaussianBlur([.1, 2.])], p=0.1),
-        transforms.RandomApply([moco.loader.Solarize()], p=0.2),
-        transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-        normalize
-    ]
 
     # TODO: FLARE22: Here I use dummy augmentation to test the code, please replace the above one with TorchIO implementation
     temp_augmentation1 = [
-        tio.transforms.RandomBlur()
+        tio.Resize(target_shape=(50, 128, 128)),
+        tio.transforms.RandomBlur(),
+        tio.RandomFlip(),
+        tio.RandomSwap(),
+        tio.RandomAnisotropy(),
     ]
 
-    # train_dataset = datasets.ImageFolder(
-    #     traindir,
-    #     moco.loader.TwoCropsTransform(transforms.Compose(augmentation1), 
-    #                                   transforms.Compose(augmentation2)))
 
-    train_dataset = flare_loader.CustomUnlabelledDataset([os.path.join(traindir, x) for x in os.listdir(traindir)], tio.transforms.Compose(temp_augmentation1))
+
+    train_dataset = flare_loader.CustomUnlabelledDataset([os.path.join(traindir, x) for x in sorted(os.listdir(traindir))[0:6]], tio.transforms.Compose(temp_augmentation1))
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, temp_augmentation1)
     else:
@@ -311,23 +330,29 @@ def main_worker(gpu, ngpus_per_node, args):
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
         num_workers=args.workers, pin_memory=True, sampler=train_sampler, drop_last=True)
-
+    for idx, (images) in train_loader:
+        print("=" * 10, images[0].shape)
+        break
+    valid_metrics = 0
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
 
         # train for one epoch
         train(train_loader, model, optimizer, scaler, summary_writer, epoch, args)
-
-        if not args.multiprocessing_distributed or (args.multiprocessing_distributed
-                and args.rank == 0): # only the first GPU saves checkpoint
-            save_checkpoint({
-                'epoch': epoch + 1,
-                'arch': args.arch,
-                'state_dict': model.state_dict(),
-                'optimizer' : optimizer.state_dict(),
-                'scaler': scaler.state_dict(),
-            }, is_best=False, filename='checkpoint_%04d.pth.tar' % epoch)
+        cur_valid_metrics = validate(train_loader, model, optimizer, scaler, summary_writer, epoch, args)
+        if cur_valid_metrics > valid_metrics:
+            print("save model")
+            valid_metrics= cur_valid_metrics
+            if not args.multiprocessing_distributed or (args.multiprocessing_distributed
+                    and args.rank == 0): # only the first GPU saves checkpoint
+                save_checkpoint({
+                    'epoch': epoch + 1,
+                    'arch': args.arch,
+                    'state_dict': model.state_dict(),
+                    'optimizer' : optimizer.state_dict(),
+                    'scaler': scaler.state_dict(),
+                }, is_best=False, filename='checkpoint_%04d.pth.tar' % epoch)
 
     if args.rank == 0:
         summary_writer.close()
@@ -348,6 +373,7 @@ def train(train_loader, model, optimizer, scaler, summary_writer, epoch, args):
     end = time.time()
     iters_per_epoch = len(train_loader)
     moco_m = args.moco_m
+    print("=" * 10, "training")
     for i, (images) in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
@@ -362,6 +388,7 @@ def train(train_loader, model, optimizer, scaler, summary_writer, epoch, args):
             images[0] = images[0].cuda(args.gpu, non_blocking=True)
             images[1] = images[1].cuda(args.gpu, non_blocking=True)
 
+        # print("=" *10, "train", images[0].shape, flush=True)
         # compute output
         with torch.cuda.amp.autocast(True):
             loss = model(images[0], images[1], moco_m)
@@ -448,5 +475,15 @@ def adjust_moco_momentum(epoch, args):
     return m
 
 
+def get_model():
+    outputChannel = 14
+    # model = UNet(in_dim=1, out_dim=outputChannel, num_filters=4) #baseline的UNET3D
+    # model = ResUNET(outputChannel=outputChannel, feature_scale=8) # 自己实现的resunet3D ， 这个可能是最稳定的版本
+
+    model = ResidualUNet3D(in_channels=1,num_classes=outputChannel,final_sigmoid=False,num_levels=4,f_maps=64,layer_order='cbl')
+    # 这个是git上面一个resunet3D ， 花样很多
+
+    # model = ViTVNet.ViTVNet(img_size=(256, 128, 128))  #队友推荐的VIT3D
+    return model
 if __name__ == '__main__':
     main()

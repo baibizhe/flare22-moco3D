@@ -1,8 +1,9 @@
 python main_moco.py \
-  -b 1 \
+  -b 2 \
   --optimizer=adamw --lr=1.5e-4 --weight-decay=.1 \
   --epochs=400 --warmup-epochs=20 \
   --stop-grad-conv1 --moco-m-cos --moco-t=.2 \
   --gpu=0 \
-  -p 10 \
-   /home/dd/flare2022/data/unlabel
+  -p 1 \
+  -j 1 \
+   /home/dd/flare2022/data/FLARE22_UnlabeledCase251-500/
