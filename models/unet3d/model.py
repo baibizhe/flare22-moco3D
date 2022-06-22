@@ -77,7 +77,7 @@ class Abstract3DUNet(nn.Module):
         # remove the last encoder's output from the list
         # !!remember: it's the 1st in the list
         encoders_features = encoders_features[1:]
-        print([i.shape for i in encoders_features])
+        # print([i.shape for i in encoders_features])
         # decoder part
         for decoder, encoder_features in zip(self.decoders, encoders_features):
             # pass the output from the corresponding encoder and the output

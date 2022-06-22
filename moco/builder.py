@@ -90,7 +90,6 @@ class MoCo(nn.Module):
         """
         # print(x1.shape,x2.shape)
         # compute features
-        print(self.base_encoder(x1).shape)
         q1 = self.predictor(self.base_encoder(x1))
         q2 = self.predictor(self.base_encoder(x2))
 

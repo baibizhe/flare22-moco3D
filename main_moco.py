@@ -161,8 +161,8 @@ def validate(train_loader, model, optimizer, scaler, summary_writer, epoch, args
     # residualUNet3D = ResidualUNet3D()
     # return 0
     #TODO: 把model.base_encoder的weight 读进到residualUNet3D的encoders里面
-    val_label_path = '/data/FLARE22_LabeledCase50/label/'
-    val_ct_path = '/data/FLARE22_LabeledCase50/images/'
+    val_label_path = '/home/dd/flare2022/data/FLARE22_LabeledCase50/label/'
+    val_ct_path = '/home/dd/flare2022/data/FLARE22_LabeledCase50/images/'
 
     val_label_path = os.path.join("data","FLARE22_LabeledCase50","images")+os.sep
     val_ct_path = os.path.join("data","FLARE22_LabeledCase50","labels")+os.sep
@@ -171,22 +171,25 @@ def validate(train_loader, model, optimizer, scaler, summary_writer, epoch, args
     val_model.cuda(args.gpu)
     val_model.encoders = model.base_encoder.encoders
     val_ds = flare_loader.CustomValidImageDataset([val_ct_path + i for i in os.listdir(val_ct_path)],
-                                                 [val_label_path + i for i in os.listdir(val_label_path)], 
+                                                 [val_label_path + i for i in os.listdir(val_label_path)],
                                                  tio.transforms.Compose([tio.Resize(target_shape=(64, 128, 128))]),
                                                  tio.transforms.Compose([tio.Resize(target_shape=(64, 128, 128))]))
     val_loader = torch.utils.data.DataLoader(
-        val_ds, batch_size=1, 
+        val_ds, batch_size=1,
         num_workers=args.workers, pin_memory=True)
     val_model.eval()
+    losses = AverageMeter("val_loss", ':.4e')
+    dice_coefficients = AverageMeter("dice", ':.4e')
     for batch_idx, (data, target) in enumerate(val_loader):
-        print("="*10, "VAL", data.shape, target.shape)
         data, target = data.cuda(args.gpu), target.cuda(args.gpu)
         with torch.no_grad():
             with torch.cuda.amp.autocast(True):
                 pred = val_model(data)
-        print("=" * 10,"pred", pred.shape)
-    print("validate")
-    return 1
+                pred = torch.argmax(pred, 1)
+                dice_coefficients.update(flare_loader.compute_dice_coefficient(pred.cpu().numpy().astype(int), target.cpu().numpy()), 1)
+    print("DICE:", dice_coefficients)
+    # print("validate")
+    return dice_coefficients.avg
     pass
 
 
@@ -325,12 +328,12 @@ def main_worker(gpu, ngpus_per_node, args):
 
 
 
-    train_dataset = flare_loader.CustomUnlabelledDataset([os.path.join(traindir, x) for x in sorted(os.listdir(traindir))[0:6]], tio.transforms.Compose(temp_augmentation1))
+    train_dataset = flare_loader.CustomUnlabelledDataset([os.path.join(traindir, x) for x in sorted(os.listdir(traindir))], tio.transforms.Compose(temp_augmentation1))
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, temp_augmentation1)
     else:
         train_sampler = None
-
+    print("unlabeled traning length {}".format(len(train_dataset)))
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
         num_workers=args.workers, pin_memory=True, sampler=train_sampler, drop_last=True)
