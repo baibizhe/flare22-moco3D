@@ -159,17 +159,21 @@ def main():
 
 def validate(train_loader, model, optimizer, scaler, summary_writer, epoch, args):
     # residualUNet3D = ResidualUNet3D()
+    # return 0
     #TODO: 把model.base_encoder的weight 读进到residualUNet3D的encoders里面
-    val_label_path = '/home/dd/flare2022/data/FLARE22_LabeledCase50/label/'
-    val_ct_path = '/home/dd/flare2022/data/FLARE22_LabeledCase50/images/'
+    val_label_path = '/data/FLARE22_LabeledCase50/label/'
+    val_ct_path = '/data/FLARE22_LabeledCase50/images/'
+
+    val_label_path = os.path.join("data","FLARE22_LabeledCase50","images")+os.sep
+    val_ct_path = os.path.join("data","FLARE22_LabeledCase50","labels")+os.sep
     torch.cuda.set_device(args.gpu)
     val_model = get_model()
     val_model.cuda(args.gpu)
-    # val_model.encoders = model.base_encoder.encoders
+    val_model.encoders = model.base_encoder.encoders
     val_ds = flare_loader.CustomValidImageDataset([val_ct_path + i for i in os.listdir(val_ct_path)],
                                                  [val_label_path + i for i in os.listdir(val_label_path)], 
-                                                 tio.transforms.Compose([tio.Resize(target_shape=(50, 128, 128))]),
-                                                 tio.transforms.Compose([tio.Resize(target_shape=(50, 128, 128))]))
+                                                 tio.transforms.Compose([tio.Resize(target_shape=(64, 128, 128))]),
+                                                 tio.transforms.Compose([tio.Resize(target_shape=(64, 128, 128))]))
     val_loader = torch.utils.data.DataLoader(
         val_ds, batch_size=1, 
         num_workers=args.workers, pin_memory=True)
@@ -312,7 +316,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # TODO: FLARE22: Here I use dummy augmentation to test the code, please replace the above one with TorchIO implementation
     temp_augmentation1 = [
-        tio.Resize(target_shape=(50, 128, 128)),
+        tio.Resize(target_shape=(64, 128, 128)),
         tio.transforms.RandomBlur(),
         tio.RandomFlip(),
         tio.RandomSwap(),

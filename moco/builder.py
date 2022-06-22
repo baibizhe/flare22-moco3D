@@ -163,7 +163,7 @@ class MoCo_ResNET3D(MoCo):
 
     def _build_projector_and_predictor_mlps(self, dim, mlp_dim):
 
-        hidden_dim = self.base_encoder.encoders[-1].basic_module.conv3.conv.out_channels*3*int(self.num_levels/2)
+        hidden_dim = 4096
         # projectors
         self.base_encoder.fc = self._build_mlp(3, hidden_dim, mlp_dim, dim).cuda()
         self.momentum_encoder.fc = self._build_mlp(3, hidden_dim, mlp_dim, dim).cuda()
